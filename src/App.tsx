@@ -141,12 +141,12 @@ const resolveDid = async (did: string) => {
   const res = await fetch(
     did.startsWith("did:web") ?
       `https://${did.split(":")[2]}/.well-known/did.json`
-    : "https://plc.directory/" + did,
+      : "https://plc.directory/" + did,
   ).catch((error: unknown) => {
     console.warn("Failed to resolve DID", { error, did });
     return null;
   });
-  
+
   if (!res) {
     return `[Failed to resolve: ${did.substring(0, 15)}...]`;
   }
@@ -212,7 +212,7 @@ const Login: Component = () => {
       }
     };
 
-    const session = await init().catch(() => {});
+    const session = await init().catch(() => { });
 
     if (session) {
       agent = new OAuthUserAgent(session);
@@ -234,7 +234,7 @@ const Login: Component = () => {
     const res = await fetch(
       did.startsWith("did:web") ?
         `https://${did.split(":")[2]}/.well-known/did.json`
-      : "https://plc.directory/" + did,
+        : "https://plc.directory/" + did,
     );
 
     return res.json().then((doc: any) => {
@@ -364,26 +364,24 @@ const ModeSelector: Component = () => {
     // Reset notice when switching modes to avoid confusion
     setGlobalNotice("");
   };
-  
+
   return (
     <div class="flex gap-4 mb-4">
       <button
         onclick={() => handleModeChange(ViewMode.FOLLOWS)}
-        class={`px-4 py-2 rounded font-semibold transition-colors ${
-          currentMode() === ViewMode.FOLLOWS
-            ? "bg-blue-600 text-white"
-            : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
-        }`}
+        class={`px-4 py-2 rounded font-semibold transition-colors ${currentMode() === ViewMode.FOLLOWS
+          ? "bg-blue-600 text-white"
+          : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+          }`}
       >
         Clean Follows
       </button>
       <button
         onclick={() => handleModeChange(ViewMode.BLOCKS)}
-        class={`px-4 py-2 rounded font-semibold transition-colors ${
-          currentMode() === ViewMode.BLOCKS
-            ? "bg-blue-600 text-white"
-            : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
-        }`}
+        class={`px-4 py-2 rounded font-semibold transition-colors ${currentMode() === ViewMode.BLOCKS
+          ? "bg-blue-600 text-white"
+          : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+          }`}
       >
         Clean Blocks
       </button>
@@ -443,7 +441,7 @@ const Fetch: Component = () => {
       }
 
       handle = res.data.handle;
-      
+
       // Analyze viewer relationship and account status
       const viewer = res.data.viewer;
       if (!viewer || typeof viewer !== 'object') {
@@ -452,16 +450,16 @@ const Fetch: Component = () => {
         // Check for hidden content via moderation labels
         if (res.data.labels?.some((label) => label.val === "!hide")) {
           status = RepoStatus.HIDDEN;
-        // Check for block relationships
+          // Check for block relationships
         } else if (viewer.blockedBy) {
           status =
             viewer.blocking || viewer.blockingByList ?
               RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING  // Mutual block
-            : RepoStatus.BLOCKEDBY;
-        // Check if this is the user's own account
+              : RepoStatus.BLOCKEDBY;
+          // Check if this is the user's own account
         } else if (res.data.did === agentDID) {
           status = RepoStatus.YOURSELF;
-        // Check if user is blocking this account
+          // Check if user is blocking this account
         } else if (viewer.blocking || viewer.blockingByList) {
           status = RepoStatus.BLOCKING;
         }
@@ -469,7 +467,7 @@ const Fetch: Component = () => {
       }
 
       return { handle, status };
-      
+
     } catch (e: any) {
       // Resolve handle via DID document when API call fails
       handle = await resolveDid(did);
@@ -477,7 +475,7 @@ const Fetch: Component = () => {
       const errorMessage = e.message || "";
       const errorStatus = e.status;
       const errorData = e.data || {};
-      
+
       // Map specific API errors to RepoStatus values
       if (errorData.error === "AccountDeactivated" || errorMessage.includes("AccountDeactivated")) {
         status = RepoStatus.DEACTIVATED;
@@ -488,7 +486,7 @@ const Fetch: Component = () => {
       } else {
         status = RepoStatus.UNKNOWN;
       }
-      
+
       return {
         handle,
         status,
@@ -528,18 +526,18 @@ const Fetch: Component = () => {
     // Fetch all active blocks
     let res = await fetchPage();
     let blocks = res.data.blocks;
-    
+
     while (res.data.cursor) {
       res = await fetchPage(res.data.cursor);
       blocks = blocks.concat(res.data.blocks);
     }
 
     const blockedDids = new Set(blocks.map(b => b.did));
-    
+
     // Fetch block records from repository to get URIs
     const blockUris: { did: string; uri: string }[] = [];
     let recordsCursor: string | undefined;
-    
+
     do {
       try {
         const recordsRes = await rpc.get("com.atproto.repo.listRecords", {
@@ -553,13 +551,13 @@ const Fetch: Component = () => {
 
         for (const record of recordsRes.data.records) {
           const blockRecord = record.value as AppBskyGraphBlock.Record;
-          
+
           if (blockedDids.has(blockRecord.subject)) {
-            blockUris.push({ 
-              did: blockRecord.subject, 
-              uri: record.uri 
+            blockUris.push({
+              did: blockRecord.subject,
+              uri: record.uri
             });
-            
+
             blockedDids.delete(blockRecord.subject);
           }
         }
@@ -593,7 +591,7 @@ const Fetch: Component = () => {
 
     let res = await fetchPage();
     let follows = res.data.records;
-    
+
     while (res.data.cursor && res.data.records.length >= PAGE_LIMIT) {
       res = await fetchPage(res.data.cursor);
       follows = follows.concat(res.data.records);
@@ -611,17 +609,17 @@ const Fetch: Component = () => {
    */
   const fetchHiddenAccounts = async () => {
     setProgress(0);
-    
+
     // Get current toggle states for the active mode
     const currentToggleStates = currentMode() === ViewMode.BLOCKS ? blockToggleStates : followToggleStates;
-    
+
     if (currentMode() === ViewMode.BLOCKS) {
       // Block cleanup: Only analyze non-existent blocks for efficiency
       const allBlockRecords: { did: string; uri: string }[] = [];
       let cursor: string | undefined;
-      
+
       setGlobalNotice("Fetching blocked accounts...");
-      
+
       // Get all block records from repository
       do {
         const res = await rpc.get("com.atproto.repo.listRecords", {
@@ -632,7 +630,7 @@ const Fetch: Component = () => {
             cursor: cursor,
           },
         });
-        
+
         for (const record of res.data.records) {
           const blockRecord = record.value as AppBskyGraphBlock.Record;
           allBlockRecords.push({
@@ -640,38 +638,38 @@ const Fetch: Component = () => {
             uri: record.uri,
           });
         }
-        
+
         cursor = res.data.cursor;
       } while (cursor);
-      
+
       // Find blocks that no longer exist
       const activeBlocks = await fetchBlocks();
       const activeDids = new Set(activeBlocks.map(b => b.did));
-      
+
       const blocksToDelete = allBlockRecords.filter(record => !activeDids.has(record.did));
-      
+
       setItemCount(blocksToDelete.length);
       const tmpBlocks: BlockRecord[] = [];
       setGlobalNotice("Analyzing blocked accounts...");
-      
+
       let deletedCount = 0, deactivatedCount = 0, suspendedCount = 0, unknownCount = 0;
-      
+
       // Rate limiting: small delay between batches
       const timer = (ms: number) => new Promise((res) => setTimeout(res, ms));
-      
+
       for (let i = 0; i < blocksToDelete.length; i++) {
         if (i > 0 && i % 10 === 0) {
           await timer(100);
         }
-        
+
         const block = blocksToDelete[i];
         setProgress(i + 1);
-        
+
         const { handle, status } = await checkProfileStatus(block.did);
-        
+
         let status_label = "Unknown";
         let actualStatus = RepoStatus.UNKNOWN;
-        
+
         // Categorize the account status
         if (status === RepoStatus.DELETED) {
           status_label = "Deleted";
@@ -688,7 +686,7 @@ const Fetch: Component = () => {
         } else {
           unknownCount++;
         }
-        
+
         tmpBlocks.push({
           did: block.did,
           handle: handle || "[Unknown Handle]",
@@ -699,13 +697,13 @@ const Fetch: Component = () => {
           visible: currentToggleStates[actualStatus] ?? true,
         });
       }
-      
+
       if (tmpBlocks.length === 0) {
         setGlobalNotice("All your blocked accounts are still active");
       } else {
         setGlobalNotice("");
       }
-      
+
       setBlockRecords(tmpBlocks);
       setProgress(0);
       setItemCount(0);
@@ -724,7 +722,7 @@ const Fetch: Component = () => {
         follows.slice(i, i + 10).forEach(async (record) => {
           const follow = record.value as AppBskyGraphFollow.Record;
           const result = await checkProfileStatus(follow.subject);
-          
+
           if (result.error) {
             console.warn(`Error checking follow ${follow.subject}:`, result.error);
           }
@@ -732,15 +730,15 @@ const Fetch: Component = () => {
           // Map status to human-readable labels
           const status_label =
             result.status == RepoStatus.DELETED ? "Deleted"
-            : result.status == RepoStatus.DEACTIVATED ? "Deactivated"
-            : result.status == RepoStatus.SUSPENDED ? "Suspended"
-            : result.status == RepoStatus.YOURSELF ? "Literally Yourself"
-            : result.status == RepoStatus.BLOCKING ? "Blocking"
-            : result.status == RepoStatus.BLOCKEDBY ? "Blocked by"
-            : result.status == RepoStatus.HIDDEN ? "Hidden by moderation service"
-            : result.status == (RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING) ? "Mutual Block"
-            : result.status == RepoStatus.UNKNOWN ? "Unknown Status"
-            : "";
+              : result.status == RepoStatus.DEACTIVATED ? "Deactivated"
+                : result.status == RepoStatus.SUSPENDED ? "Suspended"
+                  : result.status == RepoStatus.YOURSELF ? "Literally Yourself"
+                    : result.status == RepoStatus.BLOCKING ? "Blocking"
+                      : result.status == RepoStatus.BLOCKEDBY ? "Blocked by"
+                        : result.status == RepoStatus.HIDDEN ? "Hidden by moderation service"
+                          : result.status == (RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING) ? "Mutual Block"
+                            : result.status == RepoStatus.UNKNOWN ? "Unknown Status"
+                              : "";
 
           // Only add accounts that have problematic statuses
           if (result.status !== undefined) {
@@ -777,7 +775,7 @@ const Fetch: Component = () => {
   const removeItems = async () => {
     const items = currentMode() === ViewMode.BLOCKS ? blockRecords : followRecords;
     const collection = currentMode() === ViewMode.BLOCKS ? "app.bsky.graph.block" : "app.bsky.graph.follow";
-    
+
     // Build deletion operations for selected items
     const writes = items
       .filter((record) => record.toDelete)
@@ -855,7 +853,7 @@ const Fetch: Component = () => {
  */
 const AccountList: Component = () => {
   const [selectedCount, setSelectedCount] = createSignal(0);
-  
+
   /**
    * Reactive abstractions for current mode operations
    * These functions automatically select the correct stores based on currentMode()
@@ -889,13 +887,18 @@ const AccountList: Component = () => {
   }
 
   /**
-   * Updates toggle state for a specific status type using the abstracted setter
-   * Also updates visibility of affected records for consistent behavior
+   * Updates the toggle state for a specific status type using the abstracted setter.
+   * Also updates the visibility of affected records for consistent behavior.
    */
   function updateToggleState(status: RepoStatus, value: boolean) {
     setCurrentToggleStates()(status, value);
     // Update visibility of records with this status
     editRecords(status, "visible", value);
+
+    // If a category is hidden, deselect all associated records
+    if (!value) {  // When the toggle is turned off
+      editRecords(status, "toDelete", false);
+    }
   }
 
   /**
@@ -981,7 +984,7 @@ const AccountList: Component = () => {
           </span>
         </div>
       </div>
-      
+
       {/* Account list */}
       <div class="sm:min-w-96">
         <For each={currentRecords()}>
@@ -1036,7 +1039,7 @@ const AccountList: Component = () => {
                         href={
                           record.did.startsWith("did:plc:") ?
                             `https://web.plc.directory/did/${record.did}`
-                          : `https://${record.did.replace("did:web:", "")}/.well-known/did.json`
+                            : `https://${record.did.replace("did:web:", "")}/.well-known/did.json`
                         }
                         target="_blank"
                         class="group/tooltip relative flex items-center"
@@ -1069,11 +1072,11 @@ const App: Component = () => {
   const [theme, setTheme] = createSignal(
     (
       localStorage.theme === "dark" ||
-        (!("theme" in localStorage) &&
-          globalThis.matchMedia("(prefers-color-scheme: dark)").matches)
+      (!("theme" in localStorage) &&
+        globalThis.matchMedia("(prefers-color-scheme: dark)").matches)
     ) ?
       "dark"
-    : "light",
+      : "light",
   );
 
   return (
@@ -1094,7 +1097,7 @@ const App: Component = () => {
           >
             {theme() === "dark" ?
               <div class="i-tabler-moon-stars text-xl" />
-            : <div class="i-tabler-sun text-xl" />}
+              : <div class="i-tabler-sun text-xl" />}
           </div>
         </div>
         <div class="basis-1/3 text-center text-xl font-bold">
@@ -1118,7 +1121,7 @@ const App: Component = () => {
       <div class="mb-2 text-center">
         <p>Select inactive or blocked accounts to manage</p>
       </div>
-      
+
       {/* Main application flow */}
       <Login />
       <Show when={loginState()}>
