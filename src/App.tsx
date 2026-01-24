@@ -2,7 +2,7 @@ import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { ComAtprotoRepoApplyWrites } from "@atcute/atproto";
-import { AppBskyGraphFollow } from "@atcute/bluesky";
+import { AppBskyGraphFollow, AppBskyGraphBlock } from "@atcute/bluesky";
 import { Client, CredentialManager } from "@atcute/client";
 import {
   CompositeDidDocumentResolver,
@@ -47,9 +47,10 @@ enum RepoStatus {
   SUSPENDED = 1 << 4,
   HIDDEN = 1 << 5,
   YOURSELF = 1 << 6,
+  UNKNOWN = 1 << 7,
 }
 
-type FollowRecord = {
+type AccountRecord = {
   did: string;
   handle: string;
   uri: string;
@@ -59,8 +60,39 @@ type FollowRecord = {
   visible: boolean;
 };
 
+type FollowRecord = AccountRecord;
+type BlockRecord = AccountRecord;
+
+enum ViewMode {
+  FOLLOWS = "follows",
+  BLOCKS = "blocks",
+}
+
+type ToggleStates = {
+  [key in RepoStatus]?: boolean;
+};
+
+const [followToggleStates, setFollowToggleStates] = createStore<ToggleStates>({
+  [RepoStatus.DELETED]: true,
+  [RepoStatus.DEACTIVATED]: true,
+  [RepoStatus.SUSPENDED]: true,
+  [RepoStatus.BLOCKEDBY]: true,
+  [RepoStatus.BLOCKING]: true,
+  [RepoStatus.HIDDEN]: true,
+});
+
+const [blockToggleStates, setBlockToggleStates] = createStore<ToggleStates>({
+  [RepoStatus.DELETED]: true,
+  [RepoStatus.DEACTIVATED]: true,
+  [RepoStatus.SUSPENDED]: true,
+  [RepoStatus.UNKNOWN]: true,
+});
+
 const [followRecords, setFollowRecords] = createStore<FollowRecord[]>([]);
+const [blockRecords, setBlockRecords] = createStore<BlockRecord[]>([]);
+const [currentMode, setCurrentMode] = createSignal<ViewMode>(ViewMode.FOLLOWS);
 const [loginState, setLoginState] = createSignal(false);
+const [globalNotice, setGlobalNotice] = createSignal("");
 let rpc: Client;
 let appviewRpc: Client;
 let agent: OAuthUserAgent;
@@ -261,217 +293,392 @@ const Login = () => {
   );
 };
 
+const ModeSelector = () => {
+  const handleModeChange = (mode: ViewMode) => {
+    setCurrentMode(mode);
+    setGlobalNotice("");
+  };
+
+  return (
+    <div class="flex gap-4 mb-4">
+      <button
+        onclick={() => handleModeChange(ViewMode.FOLLOWS)}
+        class={`px-4 py-2 rounded font-semibold transition-colors ${
+          currentMode() === ViewMode.FOLLOWS
+            ? "bg-blue-600 text-white"
+            : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+        }`}
+      >
+        Clean Follows
+      </button>
+      <button
+        onclick={() => handleModeChange(ViewMode.BLOCKS)}
+        class={`px-4 py-2 rounded font-semibold transition-colors ${
+          currentMode() === ViewMode.BLOCKS
+            ? "bg-blue-600 text-white"
+            : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+        }`}
+      >
+        Clean Blocks
+      </button>
+    </div>
+  );
+};
+
 const Fetch = () => {
   const [progress, setProgress] = createSignal(0);
-  const [followCount, setFollowCount] = createSignal(0);
-  const [notice, setNotice] = createSignal("");
+  const [itemCount, setItemCount] = createSignal(0);
   const [failedProfiles, setFailedProfiles] = createSignal(0);
 
+  const checkProfileStatus = async (did: string) => {
+    let handle = "";
+    let status: RepoStatus | undefined = undefined;
+
+    const res = await appviewRpc.get("app.bsky.actor.getProfile", {
+      params: { actor: did },
+    });
+
+    if (!res.ok) {
+      handle = await resolveDid(did);
+      const e = res.data as any;
+
+      status =
+        e.message?.includes("not found") ? RepoStatus.DELETED
+        : e.message?.includes("deactivated") ? RepoStatus.DEACTIVATED
+        : e.message?.includes("suspended") ? RepoStatus.SUSPENDED
+        : RepoStatus.UNKNOWN;
+    } else {
+      handle = res.data.handle;
+      const viewer = res.data.viewer!;
+
+      if (res.data.labels?.some((label: any) => label.val === "!hide")) {
+        status = RepoStatus.HIDDEN;
+      } else if (viewer.blockedBy) {
+        status =
+          viewer.blocking || viewer.blockingByList ?
+            RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING
+          : RepoStatus.BLOCKEDBY;
+      } else if (res.data.did.includes(agentDID)) {
+        status = RepoStatus.YOURSELF;
+      } else if (viewer.blocking || viewer.blockingByList) {
+        status = RepoStatus.BLOCKING;
+      }
+    }
+
+    return { handle, status };
+  };
+
+  const getStatusLabel = (status: RepoStatus) => {
+    if (status === RepoStatus.DELETED) return "Deleted";
+    if (status === RepoStatus.DEACTIVATED) return "Deactivated";
+    if (status === RepoStatus.SUSPENDED) return "Suspended";
+    if (status === RepoStatus.YOURSELF) return "Literally Yourself";
+    if (status === RepoStatus.HIDDEN) return "Hidden by moderation service";
+    if (status === (RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING)) return "Mutual Block";
+    if (status === RepoStatus.BLOCKING) return "Blocking";
+    if (status === RepoStatus.BLOCKEDBY) return "Blocked by";
+    if (status === RepoStatus.UNKNOWN) return "Unknown";
+    return "";
+  };
+
+  const fetchBlocks = async () => {
+    const PAGE_LIMIT = 50;
+    const fetchPage = async (cursor?: string) => {
+      return await rpc.get("app.bsky.graph.getBlocks", {
+        params: {
+          limit: PAGE_LIMIT,
+          cursor: cursor,
+        },
+      });
+    };
+
+    let res = await fetchPage();
+    if (!res.ok) throw new Error(res.data.error);
+    let blocks = res.data.blocks;
+
+    while (res.data.cursor) {
+      res = await fetchPage(res.data.cursor);
+      if (!res.ok) throw new Error(res.data.error);
+      blocks = blocks.concat(res.data.blocks);
+    }
+
+    return blocks;
+  };
+
+  const fetchFollows = async () => {
+    const PAGE_LIMIT = 100;
+    const fetchPage = async (cursor?: string) => {
+      return await rpc.get("com.atproto.repo.listRecords", {
+        params: {
+          repo: agentDID as ActorIdentifier,
+          collection: "app.bsky.graph.follow",
+          limit: PAGE_LIMIT,
+          cursor: cursor,
+        },
+      });
+    };
+
+    let res = await fetchPage();
+    if (!res.ok) throw new Error(res.data.error);
+    let follows = res.data.records;
+
+    while (res.data.cursor && res.data.records.length >= PAGE_LIMIT) {
+      res = await fetchPage(res.data.cursor);
+      if (!res.ok) throw new Error(res.data.error);
+      follows = follows.concat(res.data.records);
+    }
+
+    return follows;
+  };
+
   const fetchHiddenAccounts = async () => {
-    const fetchFollows = async () => {
-      const PAGE_LIMIT = 100;
-      const fetchPage = async (cursor?: string) => {
-        return await rpc.get("com.atproto.repo.listRecords", {
+    setProgress(0);
+
+    const currentToggleStates = currentMode() === ViewMode.BLOCKS ? blockToggleStates : followToggleStates;
+
+    if (currentMode() === ViewMode.BLOCKS) {
+      const allBlockRecords: { did: string; uri: string }[] = [];
+      let cursor: string | undefined;
+
+      setGlobalNotice("Fetching blocked accounts...");
+
+      do {
+        const res = await rpc.get("com.atproto.repo.listRecords", {
           params: {
             repo: agentDID as ActorIdentifier,
-            collection: "app.bsky.graph.follow",
-            limit: PAGE_LIMIT,
+            collection: "app.bsky.graph.block",
+            limit: 100,
             cursor: cursor,
           },
         });
-      };
+        if (!res.ok) break;
 
-      let res = await fetchPage();
-      if (!res.ok) throw new Error(res.data.error);
-      let follows = res.data.records;
-      setNotice(`Fetching follows: ${follows.length}`);
+        for (const record of res.data.records) {
+          const blockRecord = record.value as AppBskyGraphBlock.Main;
+          allBlockRecords.push({
+            did: blockRecord.subject,
+            uri: record.uri,
+          });
+        }
 
-      while (res.data.cursor && res.data.records.length >= PAGE_LIMIT) {
-        setNotice(`Fetching follows: ${follows.length}`);
-        res = await fetchPage(res.data.cursor);
-        if (!res.ok) throw new Error(res.data.error);
-        follows = follows.concat(res.data.records);
+        cursor = res.data.cursor;
+      } while (cursor);
+
+      const activeBlocks = await fetchBlocks();
+      const activeDids = new Set(activeBlocks.map(b => b.did));
+
+      const blocksToDelete = allBlockRecords.filter(record => !activeDids.has(record.did));
+
+      setItemCount(blocksToDelete.length);
+      const tmpBlocks: BlockRecord[] = [];
+      setGlobalNotice("Analyzing blocked accounts...");
+
+      const timer = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+      for (let i = 0; i < blocksToDelete.length; i++) {
+        if (i > 0 && i % 10 === 0) {
+          await timer(100);
+        }
+
+        const block = blocksToDelete[i];
+        setProgress(i + 1);
+
+        const { handle, status } = await checkProfileStatus(block.did);
+
+        let actualStatus = status || RepoStatus.UNKNOWN;
+
+        tmpBlocks.push({
+          did: block.did,
+          handle: handle || "[Unknown Handle]",
+          uri: block.uri,
+          status: actualStatus,
+          status_label: getStatusLabel(actualStatus),
+          toDelete: false,
+          visible: currentToggleStates[actualStatus] ?? true,
+        });
       }
 
-      return follows;
-    };
-
-    const getStatusLabel = (status: RepoStatus) => {
-      if (status === RepoStatus.DELETED) return "Deleted";
-      if (status === RepoStatus.DEACTIVATED) return "Deactivated";
-      if (status === RepoStatus.SUSPENDED) return "Suspended";
-      if (status === RepoStatus.YOURSELF) return "Literally Yourself";
-      if (status === RepoStatus.HIDDEN) return "Hidden by moderation service";
-      if (status === (RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING)) return "Mutual Block";
-      if (status === RepoStatus.BLOCKING) return "Blocking";
-      if (status === RepoStatus.BLOCKEDBY) return "Blocked by";
-      return "";
-    };
-
-    setProgress(0);
-    setFailedProfiles(0);
-    const follows = await fetchFollows();
-    setFollowCount(follows.length);
-    const tmpFollows: FollowRecord[] = [];
-    setNotice("");
-    const BATCH_SIZE = 20; // Max is 25 per API spec, using 20 to be safe
-    const CONCURRENT_BATCHES = 2; // Reduced to avoid rate limiting
-    const BATCH_DELAY_MS = 500; // Delay between batch groups
-
-    // Create all batches
-    const batches = [];
-    for (let i = 0; i < follows.length; i += BATCH_SIZE) {
-      batches.push(follows.slice(i, i + BATCH_SIZE));
-    }
-
-    // Process batches in parallel with concurrency limit
-    for (let i = 0; i < batches.length; i += CONCURRENT_BATCHES) {
-      const batchGroup = batches.slice(i, i + CONCURRENT_BATCHES);
-
-      // Add delay between batch groups to avoid rate limiting
-      if (i > 0) {
-        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+      if (tmpBlocks.length === 0) {
+        setGlobalNotice("All your blocked accounts are still active");
+      } else {
+        setGlobalNotice("");
       }
 
-      const results = await Promise.allSettled(
-        batchGroup.map(async (batch) => {
-          const dids = batch.map((record) => (record.value as AppBskyGraphFollow.Main).subject);
+      setBlockRecords(tmpBlocks);
+      setProgress(0);
+      setItemCount(0);
+    } else {
+      setGlobalNotice("Fetching followed accounts...");
+      setFailedProfiles(0);
+      const follows = await fetchFollows();
+      setItemCount(follows.length);
+      const tmpFollows: FollowRecord[] = [];
+      setGlobalNotice("Analyzing followed accounts...");
 
-          try {
-            const res = await appviewRpc.get("app.bsky.actor.getProfiles", {
-              params: { actors: dids as Did[] },
-            });
+      const BATCH_SIZE = 20; // Max is 25 per API spec, using 20 to be safe
+      const CONCURRENT_BATCHES = 2; // Reduced to avoid rate limiting
+      const BATCH_DELAY_MS = 500; // Delay between batch groups
 
-            if (!res.ok) {
-              console.warn("Failed to fetch profiles for batch:", {
-                error: res.data,
-                didCount: dids.length,
+      // Create all batches
+      const batches = [];
+      for (let i = 0; i < follows.length; i += BATCH_SIZE) {
+        batches.push(follows.slice(i, i + BATCH_SIZE));
+      }
+
+      // Process batches in parallel with concurrency limit
+      for (let i = 0; i < batches.length; i += CONCURRENT_BATCHES) {
+        const batchGroup = batches.slice(i, i + CONCURRENT_BATCHES);
+
+        // Add delay between batch groups to avoid rate limiting
+        if (i > 0) {
+          await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+        }
+
+        const results = await Promise.allSettled(
+          batchGroup.map(async (batch) => {
+            const dids = batch.map((record) => (record.value as AppBskyGraphFollow.Main).subject);
+
+            try {
+              const res = await appviewRpc.get("app.bsky.actor.getProfiles", {
+                params: { actors: dids as Did[] },
               });
+
+              if (!res.ok) {
+                console.warn("Failed to fetch profiles for batch:", {
+                  error: res.data,
+                  didCount: dids.length,
+                });
+                setFailedProfiles((prev) => prev + dids.length);
+                return { batch, dids, res: { ok: true, data: { profiles: [] } } };
+              }
+
+              return { batch, dids, res };
+            } catch (error) {
+              console.warn("Exception fetching profiles:", error);
               setFailedProfiles((prev) => prev + dids.length);
-              // Return empty profiles array for this batch instead of throwing
               return { batch, dids, res: { ok: true, data: { profiles: [] } } };
             }
-
-            return { batch, dids, res };
-          } catch (error) {
-            console.warn("Exception fetching profiles:", error);
-            setFailedProfiles((prev) => prev + dids.length);
-            return { batch, dids, res: { ok: true, data: { profiles: [] } } };
-          }
-        }),
-      );
-
-      // Process all results from this batch group
-      for (const result of results) {
-        if (result.status === "rejected") {
-          console.warn("Batch processing failed:", result.reason);
-          continue;
-        }
-
-        const { batch, dids, res } = result.value;
-        const foundDids = new Set(res.data.profiles.map((p) => p.did));
-
-        for (const profile of res.data.profiles) {
-          let status: RepoStatus | undefined = undefined;
-          const viewer = profile.viewer;
-
-          if (profile.labels?.some((label) => label.val === "!hide")) {
-            status = RepoStatus.HIDDEN;
-          } else if (viewer && viewer.blockedBy) {
-            status =
-              viewer.blocking || viewer.blockingByList ?
-                RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING
-              : RepoStatus.BLOCKEDBY;
-          } else if (profile.did === agentDID) {
-            status = RepoStatus.YOURSELF;
-          } else if (viewer && (viewer.blocking || viewer.blockingByList)) {
-            status = RepoStatus.BLOCKING;
-          }
-
-          if (status !== undefined) {
-            const record = batch.find(
-              (r) => (r.value as AppBskyGraphFollow.Main).subject === profile.did,
-            )!;
-            tmpFollows.push({
-              did: profile.did,
-              handle: profile.handle,
-              uri: record.uri,
-              status: status,
-              status_label: getStatusLabel(status),
-              toDelete: false,
-              visible: true,
-            });
-          }
-        }
-
-        // Process missing DIDs in parallel
-        const missingDids = dids.filter((did) => !foundDids.has(did));
-        const missingResults = await Promise.all(
-          missingDids.map(async (did) => {
-            let status: RepoStatus | undefined = undefined;
-            const handle = await resolveDid(did);
-
-            const profileRes = await appviewRpc.get("app.bsky.actor.getProfile", {
-              params: { actor: did },
-            });
-
-            if (!profileRes.ok) {
-              const e = profileRes.data as any;
-              status =
-                e.message.includes("not found") ? RepoStatus.DELETED
-                : e.message.includes("deactivated") ? RepoStatus.DEACTIVATED
-                : e.message.includes("suspended") ? RepoStatus.SUSPENDED
-                : undefined;
-            }
-
-            return { did, handle, status };
           }),
         );
 
-        for (const { did, handle, status } of missingResults) {
-          if (status !== undefined) {
-            const record = batch.find((r) => (r.value as AppBskyGraphFollow.Main).subject === did)!;
-            tmpFollows.push({
-              did: did,
-              handle: handle,
-              uri: record.uri,
-              status: status,
-              status_label: getStatusLabel(status),
-              toDelete: false,
-              visible: true,
-            });
+        // Process all results from this batch group
+        for (const result of results) {
+          if (result.status === "rejected") {
+            console.warn("Batch processing failed:", result.reason);
+            continue;
           }
+
+          const { batch, dids, res } = result.value;
+          const foundDids = new Set(res.data.profiles.map((p) => p.did));
+
+          for (const profile of res.data.profiles) {
+            let status: RepoStatus | undefined = undefined;
+            const viewer = profile.viewer;
+
+            if (profile.labels?.some((label) => label.val === "!hide")) {
+              status = RepoStatus.HIDDEN;
+            } else if (viewer && viewer.blockedBy) {
+              status =
+                viewer.blocking || viewer.blockingByList ?
+                  RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING
+                : RepoStatus.BLOCKEDBY;
+            } else if (profile.did === agentDID) {
+              status = RepoStatus.YOURSELF;
+            } else if (viewer && (viewer.blocking || viewer.blockingByList)) {
+              status = RepoStatus.BLOCKING;
+            }
+
+            if (status !== undefined) {
+              const record = batch.find(
+                (r) => (r.value as AppBskyGraphFollow.Main).subject === profile.did,
+              )!;
+              tmpFollows.push({
+                did: profile.did,
+                handle: profile.handle,
+                uri: record.uri,
+                status: status,
+                status_label: getStatusLabel(status),
+                toDelete: false,
+                visible: true,
+              });
+            }
+          }
+
+          // Process missing DIDs in parallel
+          const missingDids = dids.filter((did) => !foundDids.has(did));
+          const missingResults = await Promise.all(
+            missingDids.map(async (did) => {
+              let status: RepoStatus | undefined = undefined;
+              const handle = await resolveDid(did);
+
+              const profileRes = await appviewRpc.get("app.bsky.actor.getProfile", {
+                params: { actor: did },
+              });
+
+              if (!profileRes.ok) {
+                const e = profileRes.data as any;
+                status =
+                  e.message.includes("not found") ? RepoStatus.DELETED
+                  : e.message.includes("deactivated") ? RepoStatus.DEACTIVATED
+                  : e.message.includes("suspended") ? RepoStatus.SUSPENDED
+                  : undefined;
+              }
+
+              return { did, handle, status };
+            }),
+          );
+
+          for (const { did, handle, status } of missingResults) {
+            if (status !== undefined) {
+              const record = batch.find((r) => (r.value as AppBskyGraphFollow.Main).subject === did)!;
+              tmpFollows.push({
+                did: did,
+                handle: handle,
+                uri: record.uri,
+                status: status,
+                status_label: getStatusLabel(status),
+                toDelete: false,
+                visible: true,
+              });
+            }
+          }
+
+          setProgress((prev) => prev + batch.length);
         }
-
-        setProgress((prev) => prev + batch.length);
       }
-    }
 
-    if (tmpFollows.length === 0) {
-      if (failedProfiles() > 0) {
-        setNotice(
-          `Completed. ${failedProfiles()} profile(s) could not be fetched. No accounts to unfollow.`,
+      if (tmpFollows.length === 0) {
+        if (failedProfiles() > 0) {
+          setGlobalNotice(
+            `Completed. ${failedProfiles()} profile(s) could not be fetched. No accounts to unfollow.`,
+          );
+        } else {
+          setGlobalNotice("All accounts you follow are active");
+        }
+      } else if (failedProfiles() > 0) {
+        setGlobalNotice(
+          `Found ${tmpFollows.length} account(s). ${failedProfiles()} profile(s) could not be fetched.`,
         );
       } else {
-        setNotice("No accounts to unfollow");
+        setGlobalNotice("");
       }
-    } else if (failedProfiles() > 0) {
-      setNotice(
-        `Found ${tmpFollows.length} account(s). ${failedProfiles()} profile(s) could not be fetched.`,
-      );
+
+      setFollowRecords(tmpFollows);
+      setProgress(0);
+      setItemCount(0);
     }
-    setFollowRecords(tmpFollows);
-    setProgress(0);
-    setFollowCount(0);
   };
 
-  const unfollow = async () => {
-    const writes = followRecords
+  const removeItems = async () => {
+    const items = currentMode() === ViewMode.BLOCKS ? blockRecords : followRecords;
+    const collection = currentMode() === ViewMode.BLOCKS ? "app.bsky.graph.block" : "app.bsky.graph.follow";
+
+    const writes = items
       .filter((record) => record.toDelete)
       .map((record): $type.enforce<ComAtprotoRepoApplyWrites.Delete> => {
         return {
           $type: "com.atproto.repo.applyWrites#delete",
-          collection: "app.bsky.graph.follow",
+          collection: collection,
           rkey: record.uri.split("/").pop()!,
         };
       });
@@ -486,13 +693,24 @@ const Fetch = () => {
       });
     }
 
-    setFollowRecords([]);
-    setNotice(`Unfollowed ${writes.length} account${writes.length > 1 ? "s" : ""}`);
+    if (currentMode() === ViewMode.BLOCKS) {
+      setBlockRecords([]);
+      setGlobalNotice(
+        `Successfully cleaned up ${writes.length} inactive block${writes.length > 1 ? "s" : ""}`,
+      );
+    } else {
+      setFollowRecords([]);
+      setGlobalNotice(
+        `Successfully unfollowed ${writes.length} account${writes.length > 1 ? "s" : ""}`,
+      );
+    }
   };
+
+  const currentRecords = () => currentMode() === ViewMode.BLOCKS ? blockRecords : followRecords;
 
   return (
     <div class="flex flex-col items-center">
-      <Show when={followCount() === 0 && !followRecords.length}>
+      <Show when={itemCount() === 0 && !currentRecords().length}>
         <button
           type="button"
           onclick={() => fetchHiddenAccounts()}
@@ -501,21 +719,21 @@ const Fetch = () => {
           Preview
         </button>
       </Show>
-      <Show when={followRecords.length}>
+      <Show when={currentRecords().length}>
         <button
           type="button"
-          onclick={() => unfollow()}
+          onclick={() => removeItems()}
           class="rounded bg-blue-600 px-2 py-2 font-bold text-slate-100 hover:bg-blue-700"
         >
           Confirm
         </button>
       </Show>
-      <Show when={notice()}>
-        <div class="m-3">{notice()}</div>
+      <Show when={globalNotice()}>
+        <div class="m-3">{globalNotice()}</div>
       </Show>
-      <Show when={followCount() && progress() != followCount()}>
+      <Show when={itemCount() && progress() != itemCount()}>
         <div class="m-3">
-          Progress: {progress()}/{followCount()}
+          Progress: {progress()}/{itemCount()}
           {failedProfiles() > 0 && (
             <span class="text-orange-600 dark:text-orange-400"> ({failedProfiles()} failed)</span>
           )}
@@ -525,50 +743,74 @@ const Fetch = () => {
   );
 };
 
-const Follows = () => {
+const AccountList = () => {
   const [selectedCount, setSelectedCount] = createSignal(0);
 
+  const currentRecords = () => currentMode() === ViewMode.BLOCKS ? blockRecords : followRecords;
+  const setCurrentRecords = () => currentMode() === ViewMode.BLOCKS ? setBlockRecords : setFollowRecords;
+  const currentToggleStates = () => currentMode() === ViewMode.BLOCKS ? blockToggleStates : followToggleStates;
+  const setCurrentToggleStates = () => currentMode() === ViewMode.BLOCKS ? setBlockToggleStates : setFollowToggleStates;
+
   createEffect(() => {
-    setSelectedCount(followRecords.filter((record) => record.toDelete).length);
+    setSelectedCount(currentRecords().filter((record) => record.toDelete && record.visible).length);
   });
 
-  function editRecords(status: RepoStatus, field: keyof FollowRecord, value: boolean) {
-    const range = followRecords
+  function editRecords(status: RepoStatus, field: keyof AccountRecord, value: boolean) {
+    const range = currentRecords()
       .map((record, index) => {
         if (record.status & status) return index;
       })
       .filter((i) => i !== undefined);
-    setFollowRecords(range, field, value);
+    setCurrentRecords()(range, field, value);
   }
 
-  const options: { status: RepoStatus; label: string }[] = [
-    { status: RepoStatus.DELETED, label: "Deleted" },
-    { status: RepoStatus.DEACTIVATED, label: "Deactivated" },
-    { status: RepoStatus.SUSPENDED, label: "Suspended" },
-    { status: RepoStatus.BLOCKEDBY, label: "Blocked By" },
-    { status: RepoStatus.BLOCKING, label: "Blocking" },
-    { status: RepoStatus.HIDDEN, label: "Hidden" },
-  ];
+  function updateToggleState(status: RepoStatus, value: boolean) {
+    setCurrentToggleStates()(status, value);
+    editRecords(status, "visible", value);
+    if (!value) {
+      editRecords(status, "toDelete", false);
+    }
+  }
+
+  const options = () => {
+    if (currentMode() === ViewMode.BLOCKS) {
+      return [
+        { status: RepoStatus.DELETED, label: "Deleted" },
+        { status: RepoStatus.DEACTIVATED, label: "Deactivated" },
+        { status: RepoStatus.SUSPENDED, label: "Suspended" },
+        { status: RepoStatus.UNKNOWN, label: "Unknown" },
+      ];
+    } else {
+      return [
+        { status: RepoStatus.DELETED, label: "Deleted" },
+        { status: RepoStatus.DEACTIVATED, label: "Deactivated" },
+        { status: RepoStatus.SUSPENDED, label: "Suspended" },
+        { status: RepoStatus.BLOCKEDBY, label: "Blocked By" },
+        { status: RepoStatus.BLOCKING, label: "Blocking" },
+        { status: RepoStatus.HIDDEN, label: "Hidden" },
+      ];
+    }
+  };
 
   return (
     <div class="mt-6 flex flex-col sm:w-full sm:flex-row sm:justify-center">
       <div class="dark:bg-dark-500 sticky top-0 z-30 mr-5 mb-3 flex w-full flex-wrap justify-around border-b border-b-gray-400 bg-slate-100 pb-3 sm:top-3 sm:mb-0 sm:w-auto sm:flex-col sm:self-start sm:border-none">
-        <For each={options}>
+        <For each={options()}>
           {(option, index) => (
             <div
               classList={{
                 "sm:pb-2 min-w-36 sm:mb-2 mt-3 sm:mt-0": true,
                 "sm:border-b sm:border-b-gray-300 dark:sm:border-b-gray-500":
-                  index() < options.length - 1,
+                  index() < options().length - 1,
               }}
             >
               <div>
-                <label class="mt-1 mb-2 inline-flex items-center">
+                <label class="mt-1 mb-2 inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
                     class="peer sr-only"
-                    checked
-                    onChange={(e) => editRecords(option.status, "visible", e.currentTarget.checked)}
+                    checked={currentToggleStates()[option.status] ?? true}
+                    onChange={(e) => updateToggleState(option.status, e.currentTarget.checked)}
                   />
                   <span class="peer relative h-5 w-9 rounded-full bg-gray-200 peer-checked:bg-blue-600 peer-focus:ring-4 peer-focus:ring-blue-300 peer-focus:outline-none after:absolute after:start-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:after:translate-x-full peer-checked:after:border-white rtl:peer-checked:after:-translate-x-full dark:border-gray-600 dark:bg-gray-700 dark:peer-focus:ring-blue-800"></span>
                   <span class="ms-3 select-none">{option.label}</span>
@@ -590,12 +832,12 @@ const Follows = () => {
         </For>
         <div class="min-w-36 pt-3 sm:pt-0">
           <span>
-            Selected: {selectedCount()}/{followRecords.length}
+            Selected: {selectedCount()}/{currentRecords().length}
           </span>
         </div>
       </div>
       <div class="sm:min-w-96">
-        <For each={followRecords}>
+        <For each={currentRecords()}>
           {(record, index) => (
             <Show when={record.visible}>
               <div
@@ -610,7 +852,7 @@ const Follows = () => {
                     id={"record" + index()}
                     class="h-4 w-4 rounded"
                     checked={record.toDelete}
-                    onChange={(e) => setFollowRecords(index(), "toDelete", e.currentTarget.checked)}
+                    onChange={(e) => setCurrentRecords()(index(), "toDelete", e.currentTarget.checked)}
                   />
                 </div>
                 <div>
@@ -706,13 +948,14 @@ const App = () => {
         </div>
       </div>
       <div class="mb-2 text-center">
-        <p>Select inactive or blocked accounts to unfollow</p>
+        <p>Select inactive or blocked accounts to manage</p>
       </div>
       <Login />
       <Show when={loginState()}>
+        <ModeSelector />
         <Fetch />
-        <Show when={followRecords.length}>
-          <Follows />
+        <Show when={currentMode() === ViewMode.BLOCKS ? blockRecords.length : followRecords.length}>
+          <AccountList />
         </Show>
       </Show>
     </div>
