@@ -382,9 +382,12 @@ const Fetch = () => {
   };
 
   const fetchBlocks = async () => {
+    // Create a client WITHOUT AppView proxy for PDS-only endpoints
+    const pdsClient = new Client({ handler: agent });
+
     const PAGE_LIMIT = 50;
     const fetchPage = async (cursor?: string) => {
-      return await rpc.get("app.bsky.graph.getBlocks", {
+      return await pdsClient.get("app.bsky.graph.getBlocks", {
         params: {
           limit: PAGE_LIMIT,
           cursor: cursor,
@@ -464,38 +467,95 @@ const Fetch = () => {
         cursor = res.data.cursor;
       } while (cursor);
 
-      const activeBlocks = await fetchBlocks();
-      const activeDids = new Set(activeBlocks.map(b => b.did));
+      let blocksToDelete = allBlockRecords;
 
-      const blocksToDelete = allBlockRecords.filter(record => !activeDids.has(record.did));
+      try {
+        const activeBlocks = await fetchBlocks();
+        const activeDids = new Set<string>(activeBlocks.map(b => b.did));
+        blocksToDelete = allBlockRecords.filter(record => !activeDids.has(record.did));
+      } catch (error) {
+        console.warn("Failed to fetch active blocks, will analyze all blocked accounts:", error);
+      }
 
       setItemCount(blocksToDelete.length);
       const tmpBlocks: BlockRecord[] = [];
       setGlobalNotice("Analyzing blocked accounts...");
 
-      const timer = (ms: number) => new Promise((res) => setTimeout(res, ms));
+      const BATCH_SIZE = 25;
+      const CONCURRENT_BATCHES = 5;
 
-      for (let i = 0; i < blocksToDelete.length; i++) {
-        if (i > 0 && i % 10 === 0) {
-          await timer(100);
+      // Create batches
+      const batches = [];
+      for (let i = 0; i < blocksToDelete.length; i += BATCH_SIZE) {
+        batches.push(blocksToDelete.slice(i, i + BATCH_SIZE));
+      }
+
+      // Process batches in parallel with concurrency limit
+      for (let i = 0; i < batches.length; i += CONCURRENT_BATCHES) {
+        const batchGroup = batches.slice(i, i + CONCURRENT_BATCHES);
+
+        const results = await Promise.all(
+          batchGroup.map(async (batch) => {
+            const dids = batch.map((block) => block.did as Did);
+
+            const res = await rpc.get("app.bsky.actor.getProfiles", {
+              params: { actors: dids },
+            });
+
+            if (!res.ok) {
+              setGlobalNotice("Error fetching profiles. Try logging back in if you haven't.");
+              throw new Error(res.data.error);
+            }
+
+            return { batch, dids, res };
+          }),
+        );
+
+        // Process results
+        for (const { batch, dids, res } of results) {
+          const foundDids = new Set(res.data.profiles.map((p) => p.did));
+
+          // Process DIDs not returned by getProfiles (likely deleted/suspended/deactivated)
+          const missingDids = dids.filter((did) => !foundDids.has(did));
+          const missingResults = await Promise.all(
+            missingDids.map(async (did) => {
+              let status: RepoStatus | undefined = undefined;
+              const handle = await resolveDid(did);
+
+              const profileRes = await rpc.get("app.bsky.actor.getProfile", {
+                params: { actor: did as ActorIdentifier },
+              });
+
+              if (!profileRes.ok) {
+                const e = profileRes.data as any;
+                status =
+                  e.message.includes("not found") ? RepoStatus.DELETED
+                  : e.message.includes("deactivated") ? RepoStatus.DEACTIVATED
+                  : e.message.includes("suspended") ? RepoStatus.SUSPENDED
+                  : undefined;
+              }
+
+              return { did, handle, status };
+            }),
+          );
+
+          for (const { did, handle, status } of missingResults) {
+            if (status !== undefined) {
+              const block = batch.find((b) => b.did === did)!;
+              tmpBlocks.push({
+                did: block.did,
+                handle: handle || "[Unknown Handle]",
+                uri: block.uri,
+                status: status,
+                status_label: getStatusLabel(status),
+                toDelete: false,
+                visible: currentToggleStates[status] ?? true,
+              });
+            }
+          }
+
+          setProgress((prev) => prev + batch.length);
         }
-
-        const block = blocksToDelete[i];
-        setProgress(i + 1);
-
-        const { handle, status } = await checkProfileStatus(block.did);
-
-        let actualStatus = status || RepoStatus.UNKNOWN;
-
-        tmpBlocks.push({
-          did: block.did,
-          handle: handle || "[Unknown Handle]",
-          uri: block.uri,
-          status: actualStatus,
-          status_label: getStatusLabel(actualStatus),
-          toDelete: false,
-          visible: currentToggleStates[actualStatus] ?? true,
-        });
       }
 
       if (tmpBlocks.length === 0) {
@@ -683,26 +743,39 @@ const Fetch = () => {
         };
       });
 
-    const BATCHSIZE = 200;
-    for (let i = 0; i < writes.length; i += BATCHSIZE) {
-      await rpc.post("com.atproto.repo.applyWrites", {
-        input: {
-          repo: agentDID as ActorIdentifier,
-          writes: writes.slice(i, i + BATCHSIZE),
-        },
-      });
-    }
+    try {
+      const BATCHSIZE = 200;
+      for (let i = 0; i < writes.length; i += BATCHSIZE) {
+        const batch = writes.slice(i, i + BATCHSIZE);
 
-    if (currentMode() === ViewMode.BLOCKS) {
-      setBlockRecords([]);
-      setGlobalNotice(
-        `Successfully cleaned up ${writes.length} inactive block${writes.length > 1 ? "s" : ""}`,
-      );
-    } else {
-      setFollowRecords([]);
-      setGlobalNotice(
-        `Successfully unfollowed ${writes.length} account${writes.length > 1 ? "s" : ""}`,
-      );
+        const res = await rpc.post("com.atproto.repo.applyWrites", {
+          input: {
+            repo: agentDID as ActorIdentifier,
+            writes: batch,
+          },
+        });
+
+        if (!res.ok) {
+          const errorData = res.data as any;
+          setGlobalNotice(`Error: ${errorData.message || errorData.error || "Failed to delete items"}`);
+          return;
+        }
+      }
+
+      if (currentMode() === ViewMode.BLOCKS) {
+        setBlockRecords([]);
+        setGlobalNotice(
+          `Successfully cleaned up ${writes.length} inactive block${writes.length > 1 ? "s" : ""}`,
+        );
+      } else {
+        setFollowRecords([]);
+        setGlobalNotice(
+          `Successfully unfollowed ${writes.length} account${writes.length > 1 ? "s" : ""}`,
+        );
+      }
+    } catch (error) {
+      console.error("Error deleting items:", error);
+      setGlobalNotice(`Error: ${error}`);
     }
   };
 
