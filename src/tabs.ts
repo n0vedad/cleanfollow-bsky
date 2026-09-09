@@ -28,7 +28,8 @@ import { RepoStatus, ViewMode, type AccountRecord, type ToggleStates } from "./t
  * @property setRecords - Setter for the records store.
  * @property toggleStates - Visibility toggles store for this tab.
  * @property setToggleStates - Setter for the toggles store.
- * @property options - Status filter options shown in the sidebar.
+ * @property options - Status filter options shown in the sidebar, evaluated
+ *   reactively so a tab can hide categories that produced no records.
  * @property collection - Collection NSID records are deleted from.
  * @property analyze - Analyze the repo and populate `records`.
  * @property successMessage - Build the success notice after a delete, given the deleted count.
@@ -38,11 +39,20 @@ export type TabConfig = {
   setRecords: SetStoreFunction<AccountRecord[]>;
   toggleStates: ToggleStates;
   setToggleStates: SetStoreFunction<ToggleStates>;
-  options: { status: RepoStatus; label: string }[];
+  options: () => { status: RepoStatus; label: string }[];
   collection: "app.bsky.graph.follow" | "app.bsky.graph.block";
   analyze: () => Promise<void>;
   successMessage: (count: number) => string;
 };
+
+/**
+ * Whether the follows analysis produced at least one record of a given status.
+ * Reads the store reactively, so the sidebar gains and loses these categories
+ * as results come and go.
+ * @param status - the status to look for
+ * @returns whether any follow record carries exactly that status
+ */
+const hasStatus = (status: RepoStatus) => followRecords.some((record) => record.status === status);
 
 /** Tab configuration keyed by mode. */
 export const tabs: Record<ViewMode, TabConfig> = {
@@ -51,13 +61,21 @@ export const tabs: Record<ViewMode, TabConfig> = {
     setRecords: setFollowRecords,
     toggleStates: followToggleStates,
     setToggleStates: setFollowToggleStates,
-    options: [
+    options: () => [
       { status: RepoStatus.DELETED, label: "Deleted" },
       { status: RepoStatus.DEACTIVATED, label: "Deactivated" },
       { status: RepoStatus.SUSPENDED, label: "Suspended" },
       { status: RepoStatus.BLOCKEDBY, label: "Blocked By" },
       { status: RepoStatus.BLOCKING, label: "Blocking" },
+      // Categories that are usually empty are only offered once the analysis
+      // actually turned up a matching record.
+      ...(hasStatus(RepoStatus.MUTUALBLOCK) ?
+        [{ status: RepoStatus.MUTUALBLOCK, label: "Mutual Block" }]
+      : []),
       { status: RepoStatus.HIDDEN, label: "Hidden" },
+      ...(hasStatus(RepoStatus.YOURSELF) ?
+        [{ status: RepoStatus.YOURSELF, label: "Literally Yourself" }]
+      : []),
     ],
     collection: "app.bsky.graph.follow",
     analyze: analyzeFollows,
@@ -68,11 +86,10 @@ export const tabs: Record<ViewMode, TabConfig> = {
     setRecords: setBlockRecords,
     toggleStates: blockToggleStates,
     setToggleStates: setBlockToggleStates,
-    options: [
+    options: () => [
       { status: RepoStatus.DELETED, label: "Deleted" },
       { status: RepoStatus.DEACTIVATED, label: "Deactivated" },
       { status: RepoStatus.SUSPENDED, label: "Suspended" },
-      { status: RepoStatus.UNKNOWN, label: "Unknown" },
     ],
     collection: "app.bsky.graph.block",
     analyze: analyzeBlocks,

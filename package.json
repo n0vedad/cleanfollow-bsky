@@ -10,28 +10,28 @@
     "serve": "vite preview"
   },
   "devDependencies": {
-    "@atcute/bluesky": "^4.0.5",
-    "@iconify-json/lucide": "^1.2.111",
-    "@iconify-json/simple-icons": "^1.2.85",
+    "@atcute/bluesky": "^4.0.20",
+    "@iconify-json/lucide": "^1.2.130",
+    "@iconify-json/simple-icons": "^1.2.95",
     "@iconify/tailwind4": "^1.2.3",
-    "@tailwindcss/vite": "^4.3.0",
-    "@types/node": "^25.9.1",
-    "prettier": "^3.8.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^25.9.5",
+    "prettier": "^3.9.6",
     "prettier-plugin-organize-imports": "^4.3.0",
-    "prettier-plugin-tailwindcss": "^0.8.0",
-    "tailwindcss": "^4.3.0",
+    "prettier-plugin-tailwindcss": "^0.8.1",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^8.0.16",
-    "vite-plugin-solid": "^2.11.12"
+    "vite": "^8.2.2",
+    "vite-plugin-solid": "^2.11.14"
   },
   "dependencies": {
-    "@atcute/atproto": "^4.0.2",
-    "@atcute/client": "^5.0.0",
-    "@atcute/identity-resolver": "^2.0.0",
-    "@atcute/lexicons": "^2.0.0",
-    "@atcute/oauth-browser-client": "^4.0.0",
-    "@atcute/password-session": "^1.0.0",
-    "solid-js": "^1.9.13"
+    "@atcute/atproto": "^4.0.4",
+    "@atcute/client": "^5.1.1",
+    "@atcute/identity-resolver": "^2.0.1",
+    "@atcute/lexicons": "^2.1.0",
+    "@atcute/oauth-browser-client": "^4.0.1",
+    "@atcute/password-session": "^1.0.2",
+    "solid-js": "^1.9.15"
   },
   "packageManager": "pnpm@11.5.1+sha512.93f7b57422ea7068257235b4c16eb60762eb68e1dc23723199cc739043ea9be2c4143274a399d8c6defa2b1176226d9ca1c4b63482d6200c1a8fbaa78c1d1485"
 }

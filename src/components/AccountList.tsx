@@ -1,6 +1,6 @@
 /** Filterable, selectable list of analyzed records with bulk select-by-status. */
 
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { currentTab } from "../tabs";
 import { RepoStatus, type AccountRecord } from "../types";
@@ -13,22 +13,26 @@ export const AccountList = () => {
   const setCurrentRecords = () => currentTab().setRecords;
   const currentToggleStates = () => currentTab().toggleStates;
   const setCurrentToggleStates = () => currentTab().setToggleStates;
-  const options = () => currentTab().options;
+  // Memoized so the sidebar is only rebuilt when the mode or the record set
+  // changes, not on every visibility/selection update.
+  const options = createMemo(() => currentTab().options());
 
   createEffect(() => {
     setSelectedCount(currentRecords().filter((record) => record.toDelete && record.visible).length);
   });
 
   /**
-   * Apply a field change to every record whose status includes the given flag.
-   * @param status - status bit to match
+   * Apply a field change to every record in the given category. Matching is
+   * exact rather than by bit overlap, so the categories stay disjoint: a mutual
+   * block belongs to `MUTUALBLOCK` alone, never to `BLOCKING` or `BLOCKEDBY`.
+   * @param status - status to match exactly
    * @param field - record field to set
    * @param value - new value
    */
   function editRecords(status: RepoStatus, field: keyof AccountRecord, value: boolean) {
     const range = currentRecords()
       .map((record, index) => {
-        if (record.status & status) return index;
+        if (record.status === status) return index;
       })
       .filter((i) => i !== undefined);
     setCurrentRecords()(range, field, value);
@@ -61,7 +65,7 @@ export const AccountList = () => {
               }}
             >
               <div>
-                <label class="mt-1 mb-2 inline-flex items-center cursor-pointer">
+                <label class="mt-1 mb-2 inline-flex cursor-pointer items-center">
                   <input
                     type="checkbox"
                     class="peer sr-only"
@@ -108,7 +112,9 @@ export const AccountList = () => {
                     id={"record" + index()}
                     class="h-4 w-4 rounded"
                     checked={record.toDelete}
-                    onChange={(e) => setCurrentRecords()(index(), "toDelete", e.currentTarget.checked)}
+                    onChange={(e) =>
+                      setCurrentRecords()(index(), "toDelete", e.currentTarget.checked)
+                    }
                   />
                 </div>
                 <div>

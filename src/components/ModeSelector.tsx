@@ -14,23 +14,23 @@ export const ModeSelector = () => {
   };
 
   return (
-    <div class="flex gap-4 mb-4">
+    <div class="mb-4 flex gap-4">
       <button
         onclick={() => handleModeChange(ViewMode.FOLLOWS)}
-        class={`px-4 py-2 rounded font-semibold transition-colors ${
-          currentMode() === ViewMode.FOLLOWS
-            ? "bg-blue-600 text-white"
-            : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+        class={`rounded px-4 py-2 font-semibold transition-colors ${
+          currentMode() === ViewMode.FOLLOWS ?
+            "bg-blue-600 text-white"
+          : "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
         }`}
       >
         Clean Follows
       </button>
       <button
         onclick={() => handleModeChange(ViewMode.BLOCKS)}
-        class={`px-4 py-2 rounded font-semibold transition-colors ${
-          currentMode() === ViewMode.BLOCKS
-            ? "bg-blue-600 text-white"
-            : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+        class={`rounded px-4 py-2 font-semibold transition-colors ${
+          currentMode() === ViewMode.BLOCKS ?
+            "bg-blue-600 text-white"
+          : "bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
         }`}
       >
         Clean Blocks

@@ -12,14 +12,15 @@ export const [followToggleStates, setFollowToggleStates] = createStore<ToggleSta
   [RepoStatus.SUSPENDED]: true,
   [RepoStatus.BLOCKEDBY]: true,
   [RepoStatus.BLOCKING]: true,
+  [RepoStatus.MUTUALBLOCK]: true,
   [RepoStatus.HIDDEN]: true,
+  [RepoStatus.YOURSELF]: true,
 });
 
 export const [blockToggleStates, setBlockToggleStates] = createStore<ToggleStates>({
   [RepoStatus.DELETED]: true,
   [RepoStatus.DEACTIVATED]: true,
   [RepoStatus.SUSPENDED]: true,
-  [RepoStatus.UNKNOWN]: true,
 });
 
 // Analyzed results.

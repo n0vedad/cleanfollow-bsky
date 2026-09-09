@@ -44,7 +44,9 @@ export const Fetch = () => {
 
         if (!res.ok) {
           const errorData = res.data as any;
-          setGlobalNotice(`Error: ${errorData.message || errorData.error || "Failed to delete items"}`);
+          setGlobalNotice(
+            `Error: ${errorData.message || errorData.error || "Failed to delete items"}`,
+          );
           return;
         }
       }

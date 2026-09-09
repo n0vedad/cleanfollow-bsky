@@ -2,7 +2,7 @@
 
 /**
  * Status of a followed/blocked account, stored as bit flags so combined states
- * (e.g. a mutual block = `BLOCKEDBY | BLOCKING`) can be expressed and filtered.
+ * (currently only `MUTUALBLOCK`) can be expressed as a single value.
  */
 export enum RepoStatus {
   BLOCKEDBY = 1 << 0,
@@ -12,7 +12,12 @@ export enum RepoStatus {
   SUSPENDED = 1 << 4,
   HIDDEN = 1 << 5,
   YOURSELF = 1 << 6,
-  UNKNOWN = 1 << 7,
+  /**
+   * Both parties block each other. A combination rather than a raw flag, but
+   * treated as a category of its own: filters match a status exactly, so a
+   * mutual block never shows up under `BLOCKING` or `BLOCKEDBY`.
+   */
+  MUTUALBLOCK = BLOCKEDBY | BLOCKING,
 }
 
 /**
@@ -54,7 +59,7 @@ export type ToggleStates = {
 /**
  * Map a `RepoStatus` to its human-readable label.
  * @param status - the status to label
- * @returns the label, or "" if the status has no single-flag label
+ * @returns the label, or "" if the status matches no known category
  */
 export const getStatusLabel = (status: RepoStatus) => {
   if (status === RepoStatus.DELETED) return "Deleted";
@@ -62,9 +67,8 @@ export const getStatusLabel = (status: RepoStatus) => {
   if (status === RepoStatus.SUSPENDED) return "Suspended";
   if (status === RepoStatus.YOURSELF) return "Literally Yourself";
   if (status === RepoStatus.HIDDEN) return "Hidden by moderation service";
-  if (status === (RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING)) return "Mutual Block";
+  if (status === RepoStatus.MUTUALBLOCK) return "Mutual Block";
   if (status === RepoStatus.BLOCKING) return "Blocking";
   if (status === RepoStatus.BLOCKEDBY) return "Blocked by";
-  if (status === RepoStatus.UNKNOWN) return "Unknown";
   return "";
 };

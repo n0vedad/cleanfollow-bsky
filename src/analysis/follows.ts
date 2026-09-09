@@ -7,6 +7,7 @@ import { resolveDid } from "../identity";
 import { agentDID, appviewRpc, rpc } from "../session";
 import {
   failedProfiles,
+  followToggleStates,
   setFailedProfiles,
   setFollowRecords,
   setGlobalNotice,
@@ -130,7 +131,7 @@ export const analyzeFollows = async () => {
         } else if (viewer && viewer.blockedBy) {
           status =
             viewer.blocking || viewer.blockingByList ?
-              RepoStatus.BLOCKEDBY | RepoStatus.BLOCKING
+              RepoStatus.MUTUALBLOCK
             : RepoStatus.BLOCKEDBY;
         } else if (profile.did === agentDID) {
           status = RepoStatus.YOURSELF;
@@ -149,7 +150,7 @@ export const analyzeFollows = async () => {
             status: status,
             status_label: getStatusLabel(status),
             toDelete: false,
-            visible: true,
+            visible: followToggleStates[status] ?? true,
           });
         }
       }
@@ -188,7 +189,7 @@ export const analyzeFollows = async () => {
             status: status,
             status_label: getStatusLabel(status),
             toDelete: false,
-            visible: true,
+            visible: followToggleStates[status] ?? true,
           });
         }
       }
